@@ -1,0 +1,6 @@
+{
+  "name": "Aetheria Manhwa Library",
+  "description": "A modern, elegant darkest-dark minimalist manhwa reading library and private catalog management system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

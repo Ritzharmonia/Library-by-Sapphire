@@ -1,0 +1,124 @@
+{
+  "entities": {
+    "Manhwa": {
+      "title": "Manhwa",
+      "description": "A manhwa, webtoon, or comic entry in the library.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 300, "description": "Title of the manhwa" },
+        "altTitles": { "type": "string", "maxLength": 500, "description": "Alternative titles" },
+        "author": { "type": "string", "maxLength": 150, "description": "Author name" },
+        "artist": { "type": "string", "maxLength": 150, "description": "Artist name" },
+        "genres": { "type": "array", "description": "List of genres" },
+        "status": { "type": "string", "enum": ["ongoing", "completed", "hiatus"], "description": "Publication status" },
+        "synopsis": { "type": "string", "maxLength": 5000, "description": "Detailed synopsis/summary (Mongolian)" },
+        "synopsisEn": { "type": "string", "maxLength": 5000, "description": "Detailed synopsis/summary (English)" },
+        "volumes": { "type": "string", "maxLength": 50, "description": "Number of volumes" },
+        "chapterNote": { "type": "string", "maxLength": 300, "description": "Total chapters info note" },
+        "releaseYear": { "type": "string", "maxLength": 10, "description": "Release year" },
+        "coverUrl": { "type": "string", "maxLength": 2000, "description": "Permanent cover image URL" },
+        "orderIndex": { "type": "number", "description": "Order index for custom sorting" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last update timestamp" }
+      },
+      "required": ["title", "status", "coverUrl"]
+    },
+    "Chapter": {
+      "title": "Chapter",
+      "description": "A chapter belonging to a manhwa entry.",
+      "type": "object",
+      "properties": {
+        "manhwaId": { "type": "string", "maxLength": 128, "description": "Reference ID to the parent manhwa" },
+        "chapterNumber": { "type": "number", "description": "Chapter number" },
+        "title": { "type": "string", "maxLength": 300, "description": "Chapter title or subtitle" },
+        "pages": { "type": "array", "description": "Ordered array of image URLs for reader pages" },
+        "uploadDate": { "type": "string", "maxLength": 50, "description": "Display upload date" },
+        "orderIndex": { "type": "number", "description": "Sorting order" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last update timestamp" }
+      },
+      "required": ["manhwaId", "chapterNumber"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "User comment on a manhwa or chapter.",
+      "type": "object",
+      "properties": {
+        "manhwaId": { "type": "string", "maxLength": 128, "description": "Target manhwa ID" },
+        "chapterId": { "type": "string", "maxLength": 128, "description": "Target chapter ID if commenting on a chapter" },
+        "targetType": { "type": "string", "enum": ["manhwa", "chapter"], "description": "Type of target" },
+        "userId": { "type": "string", "maxLength": 128, "description": "ID of commenter" },
+        "userName": { "type": "string", "maxLength": 120, "description": "Display name of commenter" },
+        "userAvatar": { "type": "string", "maxLength": 2000, "description": "Profile picture URL" },
+        "text": { "type": "string", "maxLength": 1000, "description": "Content of comment" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["manhwaId", "targetType", "userName", "text"]
+    },
+    "Reader": {
+      "title": "Reader",
+      "description": "Registered reader profile with simple 4-digit PIN authentication.",
+      "type": "object",
+      "properties": {
+        "firstName": { "type": "string", "maxLength": 60, "description": "First name" },
+        "lastName": { "type": "string", "maxLength": 60, "description": "Last name" },
+        "fullName": { "type": "string", "maxLength": 120, "description": "Combined full name" },
+        "pin": { "type": "string", "maxLength": 10, "description": "4-digit PIN password" },
+        "avatarUrl": { "type": "string", "maxLength": 2000, "description": "Profile picture URL" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["firstName", "lastName", "pin"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Authorized administrator profile.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 200, "description": "Admin email address" },
+        "role": { "type": "string", "enum": ["admin"], "description": "Role string" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["email", "role"]
+    },
+    "Media": {
+      "title": "Media",
+      "description": "Permanently stored optimized image asset belonging to the site.",
+      "type": "object",
+      "properties": {
+        "dataUrl": { "type": "string", "maxLength": 950000, "description": "Base64 WebP/JPEG data URL of the image" },
+        "mimeType": { "type": "string", "maxLength": 100, "description": "Image MIME type" },
+        "folder": { "type": "string", "maxLength": 200, "description": "Logical asset folder" },
+        "fileName": { "type": "string", "maxLength": 255, "description": "Original sanitized file name" },
+        "size": { "type": "number", "description": "Size of stored image payload" },
+        "createdAt": { "type": "string", "maxLength": 50, "description": "Creation timestamp" }
+      },
+      "required": ["dataUrl", "mimeType", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/manhwa/{manhwaId}": {
+      "schema": "Manhwa",
+      "description": "Collection of all manhwa titles in the library."
+    },
+    "/chapters/{chapterId}": {
+      "schema": "Chapter",
+      "description": "Collection of all chapters across manhwas."
+    },
+    "/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Collection of reader comments."
+    },
+    "/readers/{readerId}": {
+      "schema": "Reader",
+      "description": "Collection of reader accounts with 4-digit PIN."
+    },
+    "/admins/{adminId}": {
+      "schema": "Admin",
+      "description": "Collection of authorized administrators."
+    },
+    "/media/{mediaId}": {
+      "schema": "Media",
+      "description": "Collection of permanently hosted manhwa covers and chapter page images."
+    }
+  }
+}

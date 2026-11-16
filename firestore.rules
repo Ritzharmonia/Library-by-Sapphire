@@ -1,0 +1,144 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        request.auth.token.email == 'montaqve@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidManhwa(data) {
+      return data.keys().hasAll(['title', 'status', 'coverUrl']) &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 300 &&
+        data.status in ['ongoing', 'completed', 'hiatus'] &&
+        data.coverUrl is string && data.coverUrl.size() > 0 && data.coverUrl.size() <= 2000 &&
+        (!('author' in data) || (data.author is string && data.author.size() <= 150)) &&
+        (!('artist' in data) || (data.artist is string && data.artist.size() <= 150)) &&
+        (!('altTitles' in data) || (data.altTitles is string && data.altTitles.size() <= 500)) &&
+        (!('synopsis' in data) || (data.synopsis is string && data.synopsis.size() <= 5000)) &&
+        (!('synopsisEn' in data) || (data.synopsisEn is string && data.synopsisEn.size() <= 5000)) &&
+        (!('volumes' in data) || (data.volumes is string && data.volumes.size() <= 50)) &&
+        (!('chapterNote' in data) || (data.chapterNote is string && data.chapterNote.size() <= 300)) &&
+        (!('releaseYear' in data) || (data.releaseYear is string && data.releaseYear.size() <= 10)) &&
+        (!('orderIndex' in data) || data.orderIndex is number) &&
+        (!('genres' in data) || (data.genres is list && data.genres.size() <= 25));
+    }
+
+    function isValidChapter(data) {
+      return data.keys().hasAll(['manhwaId', 'chapterNumber']) &&
+        data.manhwaId is string && data.manhwaId.size() <= 128 &&
+        data.chapterNumber is number &&
+        (!('title' in data) || (data.title is string && data.title.size() <= 300)) &&
+        (!('pages' in data) || (data.pages is list && data.pages.size() <= 500)) &&
+        (!('uploadDate' in data) || (data.uploadDate is string && data.uploadDate.size() <= 50)) &&
+        (!('orderIndex' in data) || data.orderIndex is number);
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['manhwaId', 'targetType', 'userName', 'text']) &&
+        data.manhwaId is string && data.manhwaId.size() <= 128 &&
+        data.targetType in ['manhwa', 'chapter'] &&
+        data.userName is string && data.userName.size() > 0 && data.userName.size() <= 120 &&
+        data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+        (!('chapterId' in data) || (data.chapterId is string && data.chapterId.size() <= 128)) &&
+        (!('userId' in data) || (data.userId is string && data.userId.size() <= 128)) &&
+        (!('userAvatar' in data) || (data.userAvatar is string && data.userAvatar.size() <= 2000)) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 50));
+    }
+
+    function isValidReader(data) {
+      return data.keys().hasAll(['firstName', 'lastName', 'pin']) &&
+        data.firstName is string && data.firstName.size() > 0 && data.firstName.size() <= 60 &&
+        data.lastName is string && data.lastName.size() > 0 && data.lastName.size() <= 60 &&
+        data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 10 &&
+        (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 2000)) &&
+        (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 120)) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 50));
+    }
+
+    function isValidMedia(data) {
+      return data.keys().hasAll(['dataUrl', 'mimeType', 'createdAt']) &&
+        data.keys().hasOnly(['dataUrl', 'mimeType', 'folder', 'fileName', 'size', 'createdAt']) &&
+        data.dataUrl is string && data.dataUrl.size() > 0 && data.dataUrl.size() <= 950000 &&
+        data.mimeType is string && data.mimeType.size() > 0 && data.mimeType.size() <= 100 &&
+        data.createdAt is string && data.createdAt.size() <= 50 &&
+        (!('folder' in data) || (data.folder is string && data.folder.size() <= 200)) &&
+        (!('fileName' in data) || (data.fileName is string && data.fileName.size() <= 255)) &&
+        (!('size' in data) || (data.size is number && data.size > 0 && data.size <= 950000));
+    }
+
+    // Manhwa titles - publicly readable, admin editable
+    match /manhwa/{manhwaId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(manhwaId) && isValidManhwa(incoming());
+      allow update: if isAdmin() && isValidId(manhwaId) && isValidManhwa(incoming());
+      allow delete: if isAdmin() && isValidId(manhwaId);
+    }
+
+    // Chapters - publicly readable, admin editable
+    match /chapters/{chapterId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(chapterId) && isValidChapter(incoming());
+      allow update: if isAdmin() && isValidId(chapterId) && isValidChapter(incoming());
+      allow delete: if isAdmin() && isValidId(chapterId);
+    }
+
+    // Permanently hosted media assets - publicly readable, admin-only writes
+    match /media/{mediaId} {
+      allow get: if isValidId(mediaId);
+      allow list: if false;
+      allow create: if isAdmin() && isValidId(mediaId) && isValidMedia(incoming());
+      allow update: if isAdmin() && isValidId(mediaId) && isValidMedia(incoming());
+      allow delete: if isAdmin() && isValidId(mediaId);
+    }
+
+    // Comments - publicly readable, readers can post, admin can moderate
+    match /comments/{commentId} {
+      allow read: if true;
+      allow create: if isValidId(commentId) && isValidComment(incoming());
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // Readers (Name + 4-digit PIN system)
+    match /readers/{readerId} {
+      allow read: if true;
+      allow create: if isValidId(readerId) && isValidReader(incoming());
+      allow update: if isValidId(readerId) && isValidReader(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // Admin profiles
+    match /admins/{adminId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}
