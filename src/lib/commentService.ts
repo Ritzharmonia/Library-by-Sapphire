@@ -52,6 +52,8 @@ function makeLegacyAsciiReaderId(lastName: string, firstName: string): string | 
   return isAsciiValidId(candidate) ? candidate : null;
 }
 
+const readerAvatarCache = new Map<string, string>();
+
 function safeAvatarUrl(avatarUrl: string | undefined, fallbackName: string): string {
   const trimmed = (avatarUrl || '').trim();
   if (trimmed && trimmed.length <= 1950) {
@@ -63,6 +65,61 @@ function safeAvatarUrl(avatarUrl: string | undefined, fallbackName: string): str
 }
 
 export const commentService = {
+  setCachedReaderAvatar(readerId: string, avatarUrl: string): void {
+    if (readerId && avatarUrl) {
+      readerAvatarCache.set(readerId, avatarUrl);
+    }
+  },
+
+  /**
+   * Subscribes in real-time to /readers/{userId} documents for all commenters in a view,
+   * ensuring every user's exact latest HD profile picture is always shown to all visitors.
+   */
+  subscribeReaderAvatars(
+    userIds: string[],
+    onUpdate: (avatars: Record<string, string>) => void
+  ): Unsubscribe {
+    const validIds = Array.from(new Set(userIds.filter((id) => isAsciiValidId(id))));
+    const currentMap: Record<string, string> = {};
+
+    for (const id of validIds) {
+      const cached = readerAvatarCache.get(id);
+      if (cached) {
+        currentMap[id] = cached;
+      }
+    }
+    if (Object.keys(currentMap).length > 0) {
+      onUpdate({ ...currentMap });
+    }
+
+    if (validIds.length === 0) {
+      return () => {};
+    }
+
+    const unsubscribers = validIds.map((id) =>
+      onSnapshot(
+        doc(db, READERS_COLLECTION, id),
+        (snap) => {
+          if (!snap.exists()) return;
+          const data = snap.data();
+          const av = typeof data.avatarUrl === 'string' ? data.avatarUrl.trim() : '';
+          if (av && av !== currentMap[id]) {
+            readerAvatarCache.set(id, av);
+            currentMap[id] = av;
+            onUpdate({ ...currentMap });
+          }
+        },
+        () => {
+          // Ignore individual missing/offline reader doc errors
+        }
+      )
+    );
+
+    return () => {
+      unsubscribers.forEach((unsub) => unsub());
+    };
+  },
+
   /**
    * Simple 4-digit PIN reader authentication (Login or Register).
    * Works with Mongolian Cyrillic and Latin names alike.
@@ -119,13 +176,16 @@ export const commentService = {
           );
         }
 
+        const finalAvatar = avatarUrl ? safeIncomingAvatar : safeExistingAvatar;
+        readerAvatarCache.set(snap.id, finalAvatar);
+
         const reader: Reader = {
           id: snap.id,
           firstName: data.firstName || fName,
           lastName: data.lastName || lName,
           fullName: data.fullName || fullName,
           pin: data.pin,
-          avatarUrl: avatarUrl ? safeIncomingAvatar : safeExistingAvatar,
+          avatarUrl: finalAvatar,
           createdAt: data.createdAt,
         };
         localStorage.setItem('sapphire_reader', JSON.stringify(reader));
@@ -141,6 +201,7 @@ export const commentService = {
         };
 
         await setDoc(docRef, newReaderData);
+        readerAvatarCache.set(primaryDocId, newReaderData.avatarUrl);
         const reader: Reader = {
           id: primaryDocId,
           ...newReaderData,
@@ -170,6 +231,7 @@ export const commentService = {
 
       const docRef = doc(db, READERS_COLLECTION, targetId);
       await setDoc(docRef, { avatarUrl: safeAvatar }, { merge: true });
+      readerAvatarCache.set(targetId, safeAvatar);
 
       if (parsed) {
         parsed.id = targetId;
@@ -196,7 +258,13 @@ export const commentService = {
           id: makeReaderId(parsed.lastName || '', parsed.firstName || ''),
         };
         localStorage.setItem('sapphire_reader', JSON.stringify(migrated));
+        if (migrated.avatarUrl) {
+          readerAvatarCache.set(migrated.id, migrated.avatarUrl);
+        }
         return migrated;
+      }
+      if (parsed?.id && parsed?.avatarUrl) {
+        readerAvatarCache.set(parsed.id, parsed.avatarUrl);
       }
       return parsed;
     } catch {

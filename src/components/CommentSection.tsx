@@ -3,6 +3,7 @@ import { Comment, Reader } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { commentService } from '../lib/commentService';
+import { MediaImage } from './MediaImage';
 import {
   MessageSquare,
   Send,
@@ -47,6 +48,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
   const [replyText, setReplyText] = useState<string>('');
   const [isPostingReply, setIsPostingReply] = useState<boolean>(false);
   const [togglingHeartId, setTogglingHeartId] = useState<string | null>(null);
+  const [readerAvatars, setReaderAvatars] = useState<Record<string, string>>({});
 
   const targetId = targetType === 'chapter' && chapterId ? chapterId : manhwaId;
 
@@ -70,6 +72,27 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     );
     return () => unsubscribe();
   }, [targetType, targetId]);
+
+  const commenterIdsKey = useMemo(() => {
+    const ids = Array.from(
+      new Set(
+        comments
+          .map((c) => c.userId)
+          .filter((id): id is string => Boolean(id))
+      )
+    ).sort();
+    return ids.join(',');
+  }, [comments]);
+
+  // Real-time reader profile picture listener so every commenter displays their own live HD avatar
+  useEffect(() => {
+    if (!commenterIdsKey) return;
+    const ids = commenterIdsKey.split(',');
+    const unsubscribe = commentService.subscribeReaderAvatars(ids, (avatars) => {
+      setReaderAvatars((prev) => ({ ...prev, ...avatars }));
+    });
+    return () => unsubscribe();
+  }, [commenterIdsKey]);
 
   // Group comments into top-level threads + chronological replies
   const { topLevelComments, repliesByParent } = useMemo(() => {
@@ -218,6 +241,15 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     const likedList = comment.likedBy || [];
     const heartCount = likedList.length;
     const isLiked = Boolean(currentReader && likedList.includes(currentReader.id));
+    const displayAvatar =
+      (comment.userId && currentReader && comment.userId === currentReader.id
+        ? currentReader.avatarUrl
+        : undefined) ||
+      (comment.userId ? readerAvatars[comment.userId] : undefined) ||
+      comment.userAvatar;
+    const fallbackAvatar = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
+      comment.userName || 'Reader'
+    )}`;
 
     return (
       <div className="flex items-start gap-2.5 sm:gap-3">
@@ -227,16 +259,12 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
             isReply ? 'w-7 h-7' : 'w-8 h-8'
           } rounded-full overflow-hidden bg-black/40 border border-[#1b212e] flex-shrink-0 mt-0.5`}
         >
-          {comment.userAvatar ? (
-            <img
-              src={comment.userAvatar}
+          {displayAvatar ? (
+            <MediaImage
+              src={displayAvatar}
+              fallbackSrc={fallbackAvatar}
               alt={comment.userName}
               className="w-full h-full object-cover"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
-                  comment.userName
-                )}`;
-              }}
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs font-bold bg-[#141824]">
@@ -347,8 +375,11 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
           >
             <div className="w-6 h-6 rounded-full overflow-hidden bg-black/50 border border-[#232a3b] flex-shrink-0">
               {currentReader.avatarUrl ? (
-                <img
+                <MediaImage
                   src={currentReader.avatarUrl}
+                  fallbackSrc={`https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
+                    currentReader.fullName
+                  )}`}
                   alt={currentReader.fullName}
                   className="w-full h-full object-cover"
                 />
@@ -385,8 +416,11 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
           <div className="flex gap-3 items-start">
             <div className="w-9 h-9 rounded-full overflow-hidden bg-black/40 border border-[#202738] flex-shrink-0 mt-0.5">
               {currentReader.avatarUrl ? (
-                <img
+                <MediaImage
                   src={currentReader.avatarUrl}
+                  fallbackSrc={`https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
+                    currentReader.fullName
+                  )}`}
                   alt={currentReader.fullName}
                   className="w-full h-full object-cover"
                 />

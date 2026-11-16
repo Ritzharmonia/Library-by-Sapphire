@@ -1,16 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import { commentService } from '../lib/commentService';
 import { uploadImage } from '../lib/storage';
+import { MediaImage } from './MediaImage';
 import { Reader } from '../types';
 import {
   X,
   User,
   KeyRound,
   Upload,
-  Image as ImageIcon,
   Loader2,
-  CheckCircle2,
   AlertCircle,
 } from 'lucide-react';
 
@@ -36,10 +35,21 @@ export const ReaderAuthModal: React.FC<ReaderAuthModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
+  useEffect(() => {
+    if (isOpen) {
+      setFirstName(currentReader?.firstName || '');
+      setLastName(currentReader?.lastName || '');
+      setPin(currentReader?.pin || '');
+      setAvatarUrl(currentReader?.avatarUrl || '');
+      setErrorMessage('');
+    }
+  }, [isOpen, currentReader]);
+
   if (!isOpen) return null;
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const inputEl = e.currentTarget;
+    const file = inputEl.files?.[0];
     if (!file) return;
 
     try {
@@ -51,6 +61,7 @@ export const ReaderAuthModal: React.FC<ReaderAuthModalProps> = ({
       setErrorMessage('Зураг хуулахад алдаа гарлаа: ' + (err.message || 'Error'));
     } finally {
       setIsUploading(false);
+      inputEl.value = '';
     }
   };
 
@@ -127,7 +138,7 @@ export const ReaderAuthModal: React.FC<ReaderAuthModalProps> = ({
           <div className="flex items-center gap-4 p-3 rounded-lg bg-[#0e121a] border border-[#161a25]">
             <div className="w-14 h-14 rounded-full overflow-hidden bg-black/50 border border-[#232a3b] flex-shrink-0">
               {avatarUrl ? (
-                <img
+                <MediaImage
                   src={avatarUrl}
                   alt="Avatar"
                   className="w-full h-full object-cover"

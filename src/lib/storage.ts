@@ -3,7 +3,9 @@ import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db, storage, handleFirestoreError, OperationType } from './firebase';
 
 export const MEDIA_PREFIX = 'firestore-media://';
+export const AVATAR_PREFIX = 'firestore-avatar://';
 const MEDIA_COLLECTION = 'media';
+const AVATARS_COLLECTION = 'avatars';
 const IDB_NAME = 'sapphire_media_cache_v1';
 const IDB_STORE = 'media_blobs';
 const MAX_SLICE_HEIGHT = 2800;
@@ -83,7 +85,7 @@ async function saveToIDB(key: string, value: string): Promise<void> {
 }
 
 export function isMediaRef(url?: string): boolean {
-  return Boolean(url && url.startsWith(MEDIA_PREFIX));
+  return Boolean(url && (url.startsWith(MEDIA_PREFIX) || url.startsWith(AVATAR_PREFIX)));
 }
 
 export function getCachedMediaSync(url?: string): string | null {
@@ -101,7 +103,10 @@ export async function resolveMediaUrl(url: string): Promise<string> {
   const existingPromise = inFlightCache.get(url);
   if (existingPromise) return existingPromise;
 
-  const mediaId = url.slice(MEDIA_PREFIX.length);
+  const isAvatar = url.startsWith(AVATAR_PREFIX);
+  const collectionName = isAvatar ? AVATARS_COLLECTION : MEDIA_COLLECTION;
+  const docId = isAvatar ? url.slice(AVATAR_PREFIX.length) : url.slice(MEDIA_PREFIX.length);
+
   const promise = (async () => {
     const idbHit = await getFromIDB(url);
     if (idbHit) {
@@ -110,7 +115,7 @@ export async function resolveMediaUrl(url: string): Promise<string> {
     }
 
     try {
-      const snap = await getDoc(doc(db, MEDIA_COLLECTION, mediaId));
+      const snap = await getDoc(doc(db, collectionName, docId));
       if (snap.exists()) {
         const data = snap.data();
         const dataUrl = typeof data.dataUrl === 'string' ? data.dataUrl : '';
@@ -122,7 +127,7 @@ export async function resolveMediaUrl(url: string): Promise<string> {
       }
       return '';
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, `${MEDIA_COLLECTION}/${mediaId}`);
+      handleFirestoreError(error, OperationType.GET, `${collectionName}/${docId}`);
     } finally {
       inFlightCache.delete(url);
     }
@@ -300,6 +305,8 @@ async function renderCompressedRegion(
     canvas.width = w;
     canvas.height = h;
     ctx.clearRect(0, 0, w, h);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     source.drawRegion(ctx, sx, sy, sw, sh, w, h);
 
     for (const q of qualities) {
@@ -425,9 +432,62 @@ async function tryFirebaseStorageUpload(
   return await currentAttempt;
 }
 
-function makeMediaId(): string {
+function makeMediaId(prefix = 'med'): string {
   const rand = Math.random().toString(36).slice(2, 10);
-  return `med_${Date.now()}_${rand}`;
+  return `${prefix}_${Date.now()}_${rand}`;
+}
+
+async function optimizeAvatarChunk(
+  file: File,
+  targetSize = 480,
+  maxDataUrlLength = 135000
+): Promise<OptimizedChunk> {
+  const source = await decodeImageSource(file);
+  try {
+    const side = Math.min(source.width, source.height);
+    const sx = Math.max(0, Math.floor((source.width - side) / 2));
+    const sy = Math.max(0, Math.floor((source.height - side) / 2));
+    const outputSize = Math.min(targetSize, Math.max(side, 256));
+    return await renderCompressedRegion(
+      source,
+      sx,
+      sy,
+      side,
+      side,
+      outputSize,
+      maxDataUrlLength
+    );
+  } finally {
+    source.close();
+  }
+}
+
+async function persistAvatarToSite(
+  chunk: OptimizedChunk,
+  sanitizedFileName: string
+): Promise<string> {
+  const ext = chunk.mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const baseName = sanitizedFileName.replace(/\.[^.]+$/, '');
+  const storagePath = `avatars/${Date.now()}_${Math.random().toString(36).slice(2, 6)}_${baseName}.${ext}`;
+
+  const remoteUrl = await tryFirebaseStorageUpload(storagePath, chunk.blob, chunk.mimeType);
+  if (remoteUrl) return remoteUrl;
+
+  const avatarId = makeMediaId('av');
+  const refUrl = `${AVATAR_PREFIX}${avatarId}`;
+  try {
+    await setDoc(doc(db, AVATARS_COLLECTION, avatarId), {
+      dataUrl: chunk.dataUrl,
+      mimeType: chunk.mimeType,
+      size: chunk.dataUrl.length,
+      createdAt: new Date().toISOString(),
+    });
+    memoryCache.set(refUrl, chunk.dataUrl);
+    void saveToIDB(refUrl, chunk.dataUrl);
+    return refUrl;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `${AVATARS_COLLECTION}/${avatarId}`);
+  }
 }
 
 async function persistChunkToSite(
@@ -442,7 +502,7 @@ async function persistChunkToSite(
   const remoteUrl = await tryFirebaseStorageUpload(storagePath, chunk.blob, chunk.mimeType);
   if (remoteUrl) return remoteUrl;
 
-  const mediaId = makeMediaId();
+  const mediaId = makeMediaId('med');
   const refUrl = `${MEDIA_PREFIX}${mediaId}`;
   try {
     await setDoc(doc(db, MEDIA_COLLECTION, mediaId), {
@@ -462,23 +522,14 @@ async function persistChunkToSite(
 }
 
 /**
- * Optimizes and permanently stores a single image (cover or avatar).
+ * Optimizes and permanently stores a single image (cover or HD avatar).
  */
 export async function uploadImage(file: File, folder = 'covers'): Promise<string> {
   const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
 
   if (folder === 'avatars') {
-    const storagePath = `${folder}/${Date.now()}_${sanitizedFileName}`;
-    const chunks = await optimizeImageToChunks(file, 256, 400000, false);
-    const remoteUrl = await tryFirebaseStorageUpload(
-      storagePath,
-      chunks[0].blob,
-      chunks[0].mimeType
-    );
-    if (remoteUrl) return remoteUrl;
-
-    const compact = await optimizeImageToChunks(file, 88, 1850, false);
-    return compact[0].dataUrl;
+    const avatarChunk = await optimizeAvatarChunk(file, 480, 135000);
+    return await persistAvatarToSite(avatarChunk, sanitizedFileName);
   }
 
   const maxWidth = folder.includes('cover') ? 900 : 1200;

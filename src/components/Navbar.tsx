@@ -3,6 +3,7 @@ import { BookOpen, Shield, LogOut, Search, PlusCircle, Globe, User, LogIn } from
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { Reader } from '../types';
+import { MediaImage } from './MediaImage';
 
 interface NavbarProps {
   onSearchChange: (query: string) => void;
@@ -83,8 +84,11 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <div className="w-5 h-5 rounded-full overflow-hidden bg-black/40 border border-[#202738] flex-shrink-0">
                 {currentReader.avatarUrl ? (
-                  <img
+                  <MediaImage
                     src={currentReader.avatarUrl}
+                    fallbackSrc={`https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
+                      currentReader.fullName
+                    )}`}
                     alt={currentReader.fullName}
                     className="w-full h-full object-cover"
                   />

@@ -96,6 +96,18 @@
         "createdAt": { "type": "string", "maxLength": 50, "description": "Creation timestamp" }
       },
       "required": ["dataUrl", "mimeType", "createdAt"]
+    },
+    "Avatar": {
+      "title": "Avatar",
+      "description": "Permanently stored HD reader profile picture.",
+      "type": "object",
+      "properties": {
+        "dataUrl": { "type": "string", "maxLength": 150000, "description": "HD WebP/JPEG data URL of reader avatar" },
+        "mimeType": { "type": "string", "maxLength": 100, "description": "Image MIME type" },
+        "size": { "type": "number", "description": "Size of stored avatar payload" },
+        "createdAt": { "type": "string", "maxLength": 50, "description": "Creation timestamp" }
+      },
+      "required": ["dataUrl", "mimeType", "createdAt"]
     }
   },
   "firestore": {
@@ -122,6 +134,10 @@
     "/media/{mediaId}": {
       "schema": "Media",
       "description": "Collection of permanently hosted manhwa covers and chapter page images."
+    },
+    "/avatars/{avatarId}": {
+      "schema": "Avatar",
+      "description": "Collection of HD reader profile avatars."
     }
   }
 }

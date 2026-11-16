@@ -99,6 +99,15 @@ service cloud.firestore {
         (!('size' in data) || (data.size is number && data.size > 0 && data.size <= 950000));
     }
 
+    function isValidAvatar(data) {
+      return data.keys().hasAll(['dataUrl', 'mimeType', 'createdAt']) &&
+        data.keys().hasOnly(['dataUrl', 'mimeType', 'size', 'createdAt']) &&
+        data.dataUrl is string && data.dataUrl.size() > 0 && data.dataUrl.size() <= 150000 &&
+        data.mimeType is string && data.mimeType.size() > 0 && data.mimeType.size() <= 100 &&
+        data.createdAt is string && data.createdAt.size() <= 50 &&
+        (!('size' in data) || (data.size is number && data.size > 0 && data.size <= 150000));
+    }
+
     // Manhwa titles - publicly readable, admin editable
     match /manhwa/{manhwaId} {
       allow read: if true;
@@ -122,6 +131,15 @@ service cloud.firestore {
       allow create: if isAdmin() && isValidId(mediaId) && isValidMedia(incoming());
       allow update: if isAdmin() && isValidId(mediaId) && isValidMedia(incoming());
       allow delete: if isAdmin() && isValidId(mediaId);
+    }
+
+    // HD reader profile avatars - publicly readable, readers can upload own avatars
+    match /avatars/{avatarId} {
+      allow get: if isValidId(avatarId);
+      allow list: if false;
+      allow create: if isValidId(avatarId) && isValidAvatar(incoming());
+      allow update: if isValidId(avatarId) && isValidAvatar(incoming());
+      allow delete: if isAdmin() && isValidId(avatarId);
     }
 
     // Comments - publicly readable, readers can post replies & toggle heart reactions, admin can moderate
