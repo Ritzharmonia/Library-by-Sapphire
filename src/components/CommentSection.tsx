@@ -38,15 +38,20 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
 
   const targetId = targetType === 'chapter' && chapterId ? chapterId : manhwaId;
 
-  // Real-time comments listener
+  // Real-time comments listener (shows all users' comments persistently)
   useEffect(() => {
     setLoading(true);
+    setErrorMsg('');
     const unsubscribe = commentService.subscribeComments(
       targetType,
       targetId,
       (list) => {
         setComments(list);
         setLoading(false);
+      },
+      (err) => {
+        setLoading(false);
+        setErrorMsg('Сэтгэгдэл уншихад алдаа гарлаа: ' + err.message);
       }
     );
     return () => unsubscribe();
@@ -159,14 +164,15 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
         )}
       </div>
 
+      {errorMsg && (
+        <div className="mb-4 p-2.5 rounded-lg bg-red-950/30 border border-red-800/40 text-red-300 text-xs">
+          {errorMsg}
+        </div>
+      )}
+
       {/* Comment Input Box */}
       {currentReader ? (
         <form onSubmit={handlePostComment} className="mb-6 space-y-2">
-          {errorMsg && (
-            <div className="p-2.5 rounded-lg bg-red-950/30 border border-red-800/40 text-red-300 text-xs">
-              {errorMsg}
-            </div>
-          )}
           <div className="flex gap-3 items-start">
             <div className="w-9 h-9 rounded-full overflow-hidden bg-black/40 border border-[#202738] flex-shrink-0 mt-0.5">
               {currentReader.avatarUrl ? (
@@ -183,6 +189,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
             <div className="flex-1 space-y-2">
               <textarea
                 rows={3}
+                maxLength={2000}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder={t.commentPlaceholder}
@@ -191,7 +198,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
 
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-slate-500 font-light">
-                  {currentReader.fullName} нэрээр сэтгэгдэл үлдээх
+                  {currentReader.fullName} нэрээр сэтгэгдэл үлдээх ({text.length}/2000)
                 </span>
                 <button
                   type="submit"

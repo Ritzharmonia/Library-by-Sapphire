@@ -63,10 +63,11 @@ service cloud.firestore {
 
     function isValidComment(data) {
       return data.keys().hasAll(['manhwaId', 'targetType', 'userName', 'text']) &&
+        data.keys().hasOnly(['manhwaId', 'chapterId', 'targetType', 'userId', 'userName', 'userAvatar', 'text', 'createdAt']) &&
         data.manhwaId is string && data.manhwaId.size() <= 128 &&
         data.targetType in ['manhwa', 'chapter'] &&
         data.userName is string && data.userName.size() > 0 && data.userName.size() <= 120 &&
-        data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+        data.text is string && data.text.size() > 0 && data.text.size() <= 2000 &&
         (!('chapterId' in data) || (data.chapterId is string && data.chapterId.size() <= 128)) &&
         (!('userId' in data) || (data.userId is string && data.userId.size() <= 128)) &&
         (!('userAvatar' in data) || (data.userAvatar is string && data.userAvatar.size() <= 2000)) &&
@@ -75,6 +76,7 @@ service cloud.firestore {
 
     function isValidReader(data) {
       return data.keys().hasAll(['firstName', 'lastName', 'pin']) &&
+        data.keys().hasOnly(['firstName', 'lastName', 'fullName', 'pin', 'avatarUrl', 'createdAt']) &&
         data.firstName is string && data.firstName.size() > 0 && data.firstName.size() <= 60 &&
         data.lastName is string && data.lastName.size() > 0 && data.lastName.size() <= 60 &&
         data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 10 &&

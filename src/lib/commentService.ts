@@ -5,7 +5,6 @@ import {
   setDoc,
   deleteDoc,
   getDoc,
-  getDocs,
   onSnapshot,
   query,
   where,
@@ -17,9 +16,52 @@ import { Comment, Reader } from '../types';
 const COMMENTS_COLLECTION = 'comments';
 const READERS_COLLECTION = 'readers';
 
+function isAsciiValidId(id: string): boolean {
+  return /^[a-zA-Z0-9_-]{1,128}$/.test(id);
+}
+
+/**
+ * Generates a Firestore-safe ASCII document ID for any Unicode/Cyrillic name.
+ */
+function makeReaderId(lastName: string, firstName: string): string {
+  const normalized = `${lastName.trim().toLowerCase()}_${firstName.trim().toLowerCase()}`.replace(
+    /\s+/g,
+    '_'
+  );
+  const asciiSlug = normalized.replace(/[^a-z0-9_-]/g, '').slice(0, 40);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < normalized.length; i++) {
+    const c = normalized.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ (c + i), 0x85ebca6b);
+  }
+  const hash = `${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}`;
+  return `reader_${asciiSlug ? `${asciiSlug}_` : ''}${hash}`.slice(0, 100);
+}
+
+function makeLegacyAsciiReaderId(lastName: string, firstName: string): string | null {
+  const candidate = `reader_${`${lastName.trim().toLowerCase()}_${firstName.trim().toLowerCase()}`.replace(
+    /\s+/g,
+    '_'
+  )}`.slice(0, 100);
+  return isAsciiValidId(candidate) ? candidate : null;
+}
+
+function safeAvatarUrl(avatarUrl: string | undefined, fallbackName: string): string {
+  const trimmed = (avatarUrl || '').trim();
+  if (trimmed && trimmed.length <= 1950) {
+    return trimmed;
+  }
+  return `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
+    fallbackName || 'Reader'
+  )}`.slice(0, 1950);
+}
+
 export const commentService = {
   /**
-   * Simple 4-digit PIN reader authentication (Login or Register)
+   * Simple 4-digit PIN reader authentication (Login or Register).
+   * Works with Mongolian Cyrillic and Latin names alike.
    */
   async loginOrRegisterReader(
     firstName: string,
@@ -27,18 +69,27 @@ export const commentService = {
     pin: string,
     avatarUrl?: string
   ): Promise<Reader> {
-    const fName = firstName.trim();
-    const lName = lastName.trim();
-    const cleanPin = pin.trim();
+    const fName = firstName.trim().slice(0, 60);
+    const lName = lastName.trim().slice(0, 60);
+    const cleanPin = pin.trim().slice(0, 10);
+    const fullName = `${lName} ${fName}`.slice(0, 120);
 
-    // Unique deterministic document ID based on normalized name
-    const docId = `reader_${encodeURIComponent(
-      `${lName.toLowerCase()}_${fName.toLowerCase()}`.replace(/\s+/g, '_')
-    )}`.slice(0, 100);
+    const primaryDocId = makeReaderId(lName, fName);
+    const legacyDocId = makeLegacyAsciiReaderId(lName, fName);
 
     try {
-      const docRef = doc(db, READERS_COLLECTION, docId);
-      const snap = await getDoc(docRef);
+      let docRef = doc(db, READERS_COLLECTION, primaryDocId);
+      let snap = await getDoc(docRef);
+
+      // Check legacy ASCII ID if primary hashed ID doesn't exist yet
+      if (!snap.exists() && legacyDocId && legacyDocId !== primaryDocId) {
+        const legacyRef = doc(db, READERS_COLLECTION, legacyDocId);
+        const legacySnap = await getDoc(legacyRef);
+        if (legacySnap.exists()) {
+          docRef = legacyRef;
+          snap = legacySnap;
+        }
+      }
 
       if (snap.exists()) {
         const data = snap.data();
@@ -46,43 +97,48 @@ export const commentService = {
           throw new Error('Оруулсан 4 оронтой нууц код (PIN) буруу байна.');
         }
 
-        // If new avatar provided, update it
-        let currentAvatar = data.avatarUrl;
-        if (avatarUrl && avatarUrl !== data.avatarUrl) {
-          await setDoc(docRef, { ...data, avatarUrl }, { merge: true });
-          currentAvatar = avatarUrl;
+        const safeExistingAvatar = safeAvatarUrl(data.avatarUrl, fullName);
+        const safeIncomingAvatar = avatarUrl ? safeAvatarUrl(avatarUrl, fullName) : safeExistingAvatar;
+
+        if (avatarUrl && safeIncomingAvatar !== data.avatarUrl) {
+          await setDoc(
+            docRef,
+            {
+              firstName: data.firstName || fName,
+              lastName: data.lastName || lName,
+              fullName: data.fullName || fullName,
+              pin: data.pin,
+              avatarUrl: safeIncomingAvatar,
+              createdAt: data.createdAt || new Date().toISOString(),
+            },
+            { merge: true }
+          );
         }
 
         const reader: Reader = {
           id: snap.id,
-          firstName: data.firstName,
-          lastName: data.lastName,
-          fullName: data.fullName || `${data.lastName} ${data.firstName}`,
+          firstName: data.firstName || fName,
+          lastName: data.lastName || lName,
+          fullName: data.fullName || fullName,
           pin: data.pin,
-          avatarUrl: currentAvatar,
+          avatarUrl: avatarUrl ? safeIncomingAvatar : safeExistingAvatar,
           createdAt: data.createdAt,
         };
         localStorage.setItem('sapphire_reader', JSON.stringify(reader));
         return reader;
       } else {
-        // Register new reader profile
-        const fullName = `${lName} ${fName}`;
         const newReaderData = {
           firstName: fName,
           lastName: lName,
           fullName,
           pin: cleanPin,
-          avatarUrl:
-            avatarUrl ||
-            `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
-              fullName
-            )}`,
+          avatarUrl: safeAvatarUrl(avatarUrl, fullName),
           createdAt: new Date().toISOString(),
         };
 
         await setDoc(docRef, newReaderData);
         const reader: Reader = {
-          id: docId,
+          id: primaryDocId,
           ...newReaderData,
         };
         localStorage.setItem('sapphire_reader', JSON.stringify(reader));
@@ -100,14 +156,20 @@ export const commentService = {
    * Update reader avatar
    */
   async updateReaderAvatar(readerId: string, avatarUrl: string): Promise<void> {
+    const safeId = isAsciiValidId(readerId) ? readerId : null;
     try {
-      const docRef = doc(db, READERS_COLLECTION, readerId);
-      await setDoc(docRef, { avatarUrl }, { merge: true });
-
       const saved = localStorage.getItem('sapphire_reader');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        parsed.avatarUrl = avatarUrl;
+      const parsed: Reader | null = saved ? JSON.parse(saved) : null;
+      const targetId =
+        safeId || (parsed ? makeReaderId(parsed.lastName, parsed.firstName) : makeReaderId('user', readerId));
+      const safeAvatar = safeAvatarUrl(avatarUrl, parsed?.fullName || 'Reader');
+
+      const docRef = doc(db, READERS_COLLECTION, targetId);
+      await setDoc(docRef, { avatarUrl: safeAvatar }, { merge: true });
+
+      if (parsed) {
+        parsed.id = targetId;
+        parsed.avatarUrl = safeAvatar;
         localStorage.setItem('sapphire_reader', JSON.stringify(parsed));
       }
     } catch (error) {
@@ -121,7 +183,18 @@ export const commentService = {
   getCurrentReader(): Reader | null {
     try {
       const saved = localStorage.getItem('sapphire_reader');
-      return saved ? JSON.parse(saved) : null;
+      if (!saved) return null;
+      const parsed = JSON.parse(saved) as Reader;
+      // Migrate legacy non-ASCII IDs (e.g. containing % from encodeURIComponent) cleanly
+      if (parsed && parsed.id && !isAsciiValidId(parsed.id)) {
+        const migrated: Reader = {
+          ...parsed,
+          id: makeReaderId(parsed.lastName || '', parsed.firstName || ''),
+        };
+        localStorage.setItem('sapphire_reader', JSON.stringify(migrated));
+        return migrated;
+      }
+      return parsed;
     } catch {
       return null;
     }
@@ -135,18 +208,20 @@ export const commentService = {
   },
 
   /**
-   * Subscribe to comments for a specific manhwa or chapter in real-time
+   * Subscribe to ALL users' comments for a specific manhwa or chapter in real-time.
+   * Uses a single-field Firestore query (no composite index required) so every visitor sees everyone's comments.
    */
   subscribeComments(
     targetType: 'manhwa' | 'chapter',
     targetId: string,
-    callback: (comments: Comment[]) => void
+    callback: (comments: Comment[]) => void,
+    onError?: (err: Error) => void
   ): Unsubscribe {
     const colRef = collection(db, COMMENTS_COLLECTION);
     const q =
       targetType === 'chapter'
         ? query(colRef, where('chapterId', '==', targetId))
-        : query(colRef, where('manhwaId', '==', targetId), where('targetType', '==', 'manhwa'));
+        : query(colRef, where('manhwaId', '==', targetId));
 
     return onSnapshot(
       q,
@@ -154,11 +229,15 @@ export const commentService = {
         const list: Comment[] = [];
         snapshot.forEach((docSnap) => {
           const d = docSnap.data();
+          const docTargetType = d.targetType || 'manhwa';
+          if (targetType === 'manhwa' && docTargetType !== 'manhwa') {
+            return;
+          }
           list.push({
             id: docSnap.id,
             manhwaId: d.manhwaId,
             chapterId: d.chapterId,
-            targetType: d.targetType || 'manhwa',
+            targetType: docTargetType,
             userId: d.userId,
             userName: d.userName || 'Anonymous',
             userAvatar: d.userAvatar,
@@ -171,13 +250,16 @@ export const commentService = {
         callback(list);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, COMMENTS_COLLECTION);
+        console.error('Comments subscription error:', error);
+        if (onError) {
+          onError(error instanceof Error ? error : new Error(String(error)));
+        }
       }
     );
   },
 
   /**
-   * Post a new comment
+   * Post a new comment persistently to Firestore
    */
   async postComment(
     manhwaId: string,
@@ -187,18 +269,40 @@ export const commentService = {
     chapterId?: string
   ): Promise<string> {
     const colRef = collection(db, COMMENTS_COLLECTION);
+    const userName = (reader.fullName || `${reader.lastName} ${reader.firstName}`).trim().slice(0, 120);
+    const safeUserId = isAsciiValidId(reader.id)
+      ? reader.id
+      : makeReaderId(reader.lastName || '', reader.firstName || '');
+
     const payload = {
-      manhwaId,
+      manhwaId: manhwaId.slice(0, 128),
       targetType,
-      text: text.trim(),
-      userId: reader.id,
-      userName: reader.fullName || `${reader.lastName} ${reader.firstName}`,
-      userAvatar: reader.avatarUrl || '',
+      text: text.trim().slice(0, 2000),
+      userId: safeUserId.slice(0, 128),
+      userName,
+      userAvatar: safeAvatarUrl(reader.avatarUrl, userName),
       createdAt: new Date().toISOString(),
-      ...(chapterId ? { chapterId } : {}),
+      ...(chapterId ? { chapterId: chapterId.slice(0, 128) } : {}),
     };
 
     try {
+      // Ensure reader profile exists in Firestore even if cached locally before
+      if (reader.firstName && reader.lastName && reader.pin) {
+        const readerRef = doc(db, READERS_COLLECTION, safeUserId);
+        void setDoc(
+          readerRef,
+          {
+            firstName: reader.firstName.trim().slice(0, 60),
+            lastName: reader.lastName.trim().slice(0, 60),
+            fullName: userName,
+            pin: reader.pin.trim().slice(0, 10),
+            avatarUrl: payload.userAvatar,
+            createdAt: reader.createdAt || new Date().toISOString(),
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
+
       const docRes = await addDoc(colRef, payload);
       return docRes.id;
     } catch (error) {
