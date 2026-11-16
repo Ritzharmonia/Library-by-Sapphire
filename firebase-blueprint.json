@@ -51,6 +51,7 @@
         "userName": { "type": "string", "maxLength": 120, "description": "Display name of commenter" },
         "userAvatar": { "type": "string", "maxLength": 2000, "description": "Profile picture URL" },
         "text": { "type": "string", "maxLength": 2000, "description": "Content of comment" },
+        "imageUrls": { "type": "array", "description": "Bounded list of attached gallery image URLs/refs (max 4)" },
         "parentId": { "type": "string", "maxLength": 128, "description": "Parent comment ID if this is a reply" },
         "replyToName": { "type": "string", "maxLength": 120, "description": "Display name of commenter being replied to" },
         "likedBy": { "type": "array", "description": "Bounded list of reader IDs who pressed heart" },
@@ -108,6 +109,18 @@
         "createdAt": { "type": "string", "maxLength": 50, "description": "Creation timestamp" }
       },
       "required": ["dataUrl", "mimeType", "createdAt"]
+    },
+    "CommentImage": {
+      "title": "CommentImage",
+      "description": "Permanently stored reader gallery image attached to a comment or reply.",
+      "type": "object",
+      "properties": {
+        "dataUrl": { "type": "string", "maxLength": 600000, "description": "Optimized WebP/JPEG data URL of comment image" },
+        "mimeType": { "type": "string", "maxLength": 100, "description": "Image MIME type" },
+        "size": { "type": "number", "description": "Size of stored image payload" },
+        "createdAt": { "type": "string", "maxLength": 50, "description": "Creation timestamp" }
+      },
+      "required": ["dataUrl", "mimeType", "createdAt"]
     }
   },
   "firestore": {
@@ -138,6 +151,10 @@
     "/avatars/{avatarId}": {
       "schema": "Avatar",
       "description": "Collection of HD reader profile avatars."
+    },
+    "/commentImages/{imageId}": {
+      "schema": "CommentImage",
+      "description": "Collection of images attached to reader comments and replies."
     }
   }
 }

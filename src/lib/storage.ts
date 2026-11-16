@@ -4,8 +4,10 @@ import { db, storage, handleFirestoreError, OperationType } from './firebase';
 
 export const MEDIA_PREFIX = 'firestore-media://';
 export const AVATAR_PREFIX = 'firestore-avatar://';
+export const COMMENT_IMG_PREFIX = 'firestore-comment-img://';
 const MEDIA_COLLECTION = 'media';
 const AVATARS_COLLECTION = 'avatars';
+const COMMENT_IMAGES_COLLECTION = 'commentImages';
 const IDB_NAME = 'sapphire_media_cache_v1';
 const IDB_STORE = 'media_blobs';
 const MAX_SLICE_HEIGHT = 2800;
@@ -85,7 +87,12 @@ async function saveToIDB(key: string, value: string): Promise<void> {
 }
 
 export function isMediaRef(url?: string): boolean {
-  return Boolean(url && (url.startsWith(MEDIA_PREFIX) || url.startsWith(AVATAR_PREFIX)));
+  return Boolean(
+    url &&
+      (url.startsWith(MEDIA_PREFIX) ||
+        url.startsWith(AVATAR_PREFIX) ||
+        url.startsWith(COMMENT_IMG_PREFIX))
+  );
 }
 
 export function getCachedMediaSync(url?: string): string | null {
@@ -103,9 +110,15 @@ export async function resolveMediaUrl(url: string): Promise<string> {
   const existingPromise = inFlightCache.get(url);
   if (existingPromise) return existingPromise;
 
-  const isAvatar = url.startsWith(AVATAR_PREFIX);
-  const collectionName = isAvatar ? AVATARS_COLLECTION : MEDIA_COLLECTION;
-  const docId = isAvatar ? url.slice(AVATAR_PREFIX.length) : url.slice(MEDIA_PREFIX.length);
+  let collectionName = MEDIA_COLLECTION;
+  let docId = url.slice(MEDIA_PREFIX.length);
+  if (url.startsWith(AVATAR_PREFIX)) {
+    collectionName = AVATARS_COLLECTION;
+    docId = url.slice(AVATAR_PREFIX.length);
+  } else if (url.startsWith(COMMENT_IMG_PREFIX)) {
+    collectionName = COMMENT_IMAGES_COLLECTION;
+    docId = url.slice(COMMENT_IMG_PREFIX.length);
+  }
 
   const promise = (async () => {
     const idbHit = await getFromIDB(url);
@@ -490,6 +503,39 @@ async function persistAvatarToSite(
   }
 }
 
+async function persistCommentImageToSite(
+  chunk: OptimizedChunk,
+  sanitizedFileName: string
+): Promise<string> {
+  const ext =
+    chunk.mimeType === 'image/gif'
+      ? 'gif'
+      : chunk.mimeType === 'image/webp'
+      ? 'webp'
+      : 'jpg';
+  const baseName = sanitizedFileName.replace(/\.[^.]+$/, '');
+  const storagePath = `commentImages/${Date.now()}_${Math.random().toString(36).slice(2, 6)}_${baseName}.${ext}`;
+
+  const remoteUrl = await tryFirebaseStorageUpload(storagePath, chunk.blob, chunk.mimeType);
+  if (remoteUrl) return remoteUrl;
+
+  const imageId = makeMediaId('cimg');
+  const refUrl = `${COMMENT_IMG_PREFIX}${imageId}`;
+  try {
+    await setDoc(doc(db, COMMENT_IMAGES_COLLECTION, imageId), {
+      dataUrl: chunk.dataUrl,
+      mimeType: chunk.mimeType,
+      size: chunk.dataUrl.length,
+      createdAt: new Date().toISOString(),
+    });
+    memoryCache.set(refUrl, chunk.dataUrl);
+    void saveToIDB(refUrl, chunk.dataUrl);
+    return refUrl;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `${COMMENT_IMAGES_COLLECTION}/${imageId}`);
+  }
+}
+
 async function persistChunkToSite(
   chunk: OptimizedChunk,
   folder: string,
@@ -522,7 +568,7 @@ async function persistChunkToSite(
 }
 
 /**
- * Optimizes and permanently stores a single image (cover or HD avatar).
+ * Optimizes and permanently stores a single image (cover, HD avatar, or comment attachment).
  */
 export async function uploadImage(file: File, folder = 'covers'): Promise<string> {
   const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -530,6 +576,30 @@ export async function uploadImage(file: File, folder = 'covers'): Promise<string
   if (folder === 'avatars') {
     const avatarChunk = await optimizeAvatarChunk(file, 480, 135000);
     return await persistAvatarToSite(avatarChunk, sanitizedFileName);
+  }
+
+  if (folder === 'commentImages') {
+    // Preserve animated GIFs directly if they fit within 540KB encoded
+    if (file.type === 'image/gif' && file.size <= 380 * 1024) {
+      const gifDataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          if (typeof e.target?.result === 'string') resolve(e.target.result);
+          else reject(new Error('Failed to read GIF.'));
+        };
+        reader.onerror = () => reject(new Error('File reader failed.'));
+        reader.readAsDataURL(file);
+      });
+      if (gifDataUrl.length <= 540000) {
+        return await persistCommentImageToSite(
+          { dataUrl: gifDataUrl, blob: file, mimeType: 'image/gif' },
+          sanitizedFileName
+        );
+      }
+    }
+
+    const chunks = await optimizeImageToChunks(file, 1080, 540000, false);
+    return await persistCommentImageToSite(chunks[0], sanitizedFileName);
   }
 
   const maxWidth = folder.includes('cover') ? 900 : 1200;

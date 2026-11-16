@@ -314,6 +314,9 @@ export const commentService = {
             userName: d.userName || 'Anonymous',
             userAvatar: d.userAvatar,
             text: d.text || '',
+            imageUrls: Array.isArray(d.imageUrls)
+              ? d.imageUrls.filter((u): u is string => typeof u === 'string' && u.length > 0).slice(0, 4)
+              : undefined,
             parentId: d.parentId || undefined,
             replyToName: d.replyToName || undefined,
             likedBy: Array.isArray(d.likedBy) ? d.likedBy : [],
@@ -342,13 +345,16 @@ export const commentService = {
     text: string,
     reader: Reader,
     chapterId?: string,
-    replyOptions?: { parentId?: string; replyToName?: string }
+    replyOptions?: { parentId?: string; replyToName?: string; imageUrls?: string[] }
   ): Promise<string> {
     const colRef = collection(db, COMMENTS_COLLECTION);
     const userName = (reader.fullName || `${reader.lastName} ${reader.firstName}`).trim().slice(0, 120);
     const safeUserId = isAsciiValidId(reader.id)
       ? reader.id
       : makeReaderId(reader.lastName || '', reader.firstName || '');
+    const cleanImages = Array.isArray(replyOptions?.imageUrls)
+      ? replyOptions.imageUrls.filter((u) => typeof u === 'string' && u.trim().length > 0 && u.length <= 2000).slice(0, 4)
+      : [];
 
     const payload = {
       manhwaId: manhwaId.slice(0, 128),
@@ -359,6 +365,7 @@ export const commentService = {
       userAvatar: safeAvatarUrl(reader.avatarUrl, userName),
       likedBy: [] as string[],
       createdAt: new Date().toISOString(),
+      ...(cleanImages.length > 0 ? { imageUrls: cleanImages } : {}),
       ...(chapterId ? { chapterId: chapterId.slice(0, 128) } : {}),
       ...(replyOptions?.parentId ? { parentId: replyOptions.parentId.slice(0, 128) } : {}),
       ...(replyOptions?.replyToName

@@ -3,6 +3,7 @@ import { Comment, Reader } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { commentService } from '../lib/commentService';
+import { uploadImage } from '../lib/storage';
 import { MediaImage } from './MediaImage';
 import {
   MessageSquare,
@@ -15,6 +16,7 @@ import {
   Heart,
   CornerDownRight,
   X,
+  ImagePlus,
 } from 'lucide-react';
 
 interface CommentSectionProps {
@@ -37,6 +39,8 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [text, setText] = useState<string>('');
+  const [commentImages, setCommentImages] = useState<string[]>([]);
+  const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
   const [isPosting, setIsPosting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
@@ -46,9 +50,12 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     replyToName: string;
   } | null>(null);
   const [replyText, setReplyText] = useState<string>('');
+  const [replyImages, setReplyImages] = useState<string[]>([]);
+  const [isUploadingReplyImage, setIsUploadingReplyImage] = useState<boolean>(false);
   const [isPostingReply, setIsPostingReply] = useState<boolean>(false);
   const [togglingHeartId, setTogglingHeartId] = useState<string | null>(null);
   const [readerAvatars, setReaderAvatars] = useState<Record<string, string>>({});
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
   const targetId = targetType === 'chapter' && chapterId ? chapterId : manhwaId;
 
@@ -58,6 +65,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     setErrorMsg('');
     setReplyTarget(null);
     setReplyText('');
+    setReplyImages([]);
     const unsubscribe = commentService.subscribeComments(
       targetType,
       targetId,
@@ -118,6 +126,50 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     return { topLevelComments: topLevel, repliesByParent: grouped };
   }, [comments]);
 
+  const handlePickGalleryImages = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    mode: 'comment' | 'reply'
+  ) => {
+    const inputEl = e.currentTarget;
+    const files = Array.from(inputEl.files || []);
+    inputEl.value = '';
+    if (files.length === 0) return;
+
+    const currentList = mode === 'comment' ? commentImages : replyImages;
+    const remainingSlots = Math.max(0, 4 - currentList.length);
+    if (remainingSlots === 0) {
+      setErrorMsg('Нэг сэтгэгдэлд хамгийн ихдээ 4 зураг оруулах боломжтой.');
+      return;
+    }
+
+    const validFiles = files
+      .filter((f) => f.type.startsWith('image/'))
+      .slice(0, remainingSlots);
+
+    if (validFiles.length === 0) {
+      setErrorMsg('Зөвхөн зургийн файл сонгоно уу.');
+      return;
+    }
+
+    const setUploading = mode === 'comment' ? setIsUploadingImage : setIsUploadingReplyImage;
+    const setImages = mode === 'comment' ? setCommentImages : setReplyImages;
+
+    try {
+      setUploading(true);
+      setErrorMsg('');
+      const uploadedUrls: string[] = [];
+      for (const file of validFiles) {
+        const url = await uploadImage(file, 'commentImages');
+        uploadedUrls.push(url);
+      }
+      setImages((prev) => [...prev, ...uploadedUrls].slice(0, 4));
+    } catch (err: any) {
+      setErrorMsg('Зураг оруулахад алдаа гарлаа: ' + (err?.message || 'Error'));
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handlePostComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentReader) {
@@ -126,7 +178,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     }
 
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed && commentImages.length === 0) return;
 
     try {
       setIsPosting(true);
@@ -136,9 +188,11 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
         targetType,
         trimmed,
         currentReader,
-        chapterId
+        chapterId,
+        commentImages.length > 0 ? { imageUrls: commentImages } : undefined
       );
       setText('');
+      setCommentImages([]);
     } catch (err: any) {
       setErrorMsg('Сэтгэгдэл илгээхэд алдаа гарлаа: ' + (err?.message || 'Error'));
     } finally {
@@ -153,6 +207,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     }
     setReplyTarget({ rootCommentId, replyToName });
     setReplyText('');
+    setReplyImages([]);
   };
 
   const handlePostReply = async (e: React.FormEvent) => {
@@ -164,7 +219,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     if (!replyTarget) return;
 
     const trimmed = replyText.trim();
-    if (!trimmed) return;
+    if (!trimmed && replyImages.length === 0) return;
 
     try {
       setIsPostingReply(true);
@@ -178,9 +233,11 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
         {
           parentId: replyTarget.rootCommentId,
           replyToName: replyTarget.replyToName,
+          ...(replyImages.length > 0 ? { imageUrls: replyImages } : {}),
         }
       );
       setReplyText('');
+      setReplyImages([]);
       setReplyTarget(null);
     } catch (err: any) {
       setErrorMsg('Хариу илгээхэд алдаа гарлаа: ' + (err?.message || 'Error'));
@@ -307,9 +364,41 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
             </div>
           </div>
 
-          <p className="text-xs text-slate-300 font-light mt-1.5 leading-relaxed whitespace-pre-line break-words">
-            {comment.text}
-          </p>
+          {comment.text && (
+            <p className="text-xs text-slate-300 font-light mt-1.5 leading-relaxed whitespace-pre-line break-words">
+              {comment.text}
+            </p>
+          )}
+
+          {/* Attached Gallery Images */}
+          {comment.imageUrls && comment.imageUrls.length > 0 && (
+            <div
+              className={`mt-2 grid gap-2 ${
+                comment.imageUrls.length === 1
+                  ? 'grid-cols-1 max-w-xs sm:max-w-sm'
+                  : 'grid-cols-2 max-w-md'
+              }`}
+            >
+              {comment.imageUrls.map((imgUrl, idx) => (
+                <button
+                  key={`${comment.id}-img-${idx}`}
+                  type="button"
+                  onClick={() => setLightboxImage(imgUrl)}
+                  className="group relative overflow-hidden rounded-lg border border-[#1d2434] bg-[#05070b] text-left focus:outline-none hover:border-slate-500 transition-colors"
+                >
+                  <MediaImage
+                    src={imgUrl}
+                    alt={`${comment.userName} зураг ${idx + 1}`}
+                    className={
+                      comment.imageUrls!.length === 1
+                        ? 'max-h-72 w-auto max-w-full object-contain mx-auto'
+                        : 'w-full h-36 sm:h-40 object-cover group-hover:scale-[1.02] transition-transform'
+                    }
+                  />
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Actions Row: ONLY Heart + Reply */}
           <div className="flex items-center gap-3 mt-2">
@@ -439,14 +528,76 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
                 className="w-full bg-[#0a0d14] border border-[#171c28] rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-[#2f384c] resize-y transition-colors"
               />
 
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-slate-500 font-light">
-                  {currentReader.fullName} нэрээр сэтгэгдэл үлдээх ({text.length}/2000)
-                </span>
+              {/* Attached Images Preview (Main Composer) */}
+              {commentImages.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {commentImages.map((imgUrl, idx) => (
+                    <div
+                      key={`draft-img-${idx}`}
+                      className="relative w-20 h-20 rounded-lg overflow-hidden border border-[#22293a] bg-[#05070b]"
+                    >
+                      <MediaImage
+                        src={imgUrl}
+                        alt={`Хавсаргасан зураг ${idx + 1}`}
+                        className="w-full h-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCommentImages((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                        title="Зураг хасах"
+                        className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/80 hover:bg-red-900/90 text-slate-200 flex items-center justify-center border border-slate-700"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <label
+                    title="Утасны зургийн цомгоос зураг оруулах (камер биш)"
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#0e121a] hover:bg-[#151b28] text-[11px] font-medium text-slate-300 border border-[#1c2333] transition-colors cursor-pointer ${
+                      isUploadingImage || commentImages.length >= 4
+                        ? 'opacity-50 pointer-events-none'
+                        : ''
+                    }`}
+                  >
+                    {isUploadingImage ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />
+                    ) : (
+                      <ImagePlus className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                    <span>
+                      {isUploadingImage
+                        ? 'Бэлдэж байна...'
+                        : `Зураг (${commentImages.length}/4)`}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
+                      multiple
+                      disabled={isUploadingImage || commentImages.length >= 4}
+                      onChange={(e) => handlePickGalleryImages(e, 'comment')}
+                      className="hidden"
+                    />
+                  </label>
+                  <span className="text-[11px] text-slate-500 font-light hidden sm:inline">
+                    {currentReader.fullName} ({text.length}/2000)
+                  </span>
+                </div>
+
                 <button
                   type="submit"
-                  disabled={isPosting || !text.trim()}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors disabled:opacity-40"
+                  disabled={
+                    isPosting ||
+                    isUploadingImage ||
+                    (!text.trim() && commentImages.length === 0)
+                  }
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors disabled:opacity-40 ml-auto"
                 >
                   {isPosting ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -548,29 +699,94 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
                           className="w-full bg-[#07090e] border border-[#171c28] rounded-md px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-[#2f384c] resize-y"
                         />
 
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setReplyTarget(null);
-                              setReplyText('');
-                            }}
-                            className="px-2.5 py-1 rounded text-[11px] text-slate-400 hover:text-slate-200"
+                        {/* Attached Images Preview (Reply Composer) */}
+                        {replyImages.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {replyImages.map((imgUrl, idx) => (
+                              <div
+                                key={`reply-draft-img-${idx}`}
+                                className="relative w-16 h-16 rounded-md overflow-hidden border border-[#22293a] bg-[#05070b]"
+                              >
+                                <MediaImage
+                                  src={imgUrl}
+                                  alt={`Хариу зураг ${idx + 1}`}
+                                  className="w-full h-full object-cover"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setReplyImages((prev) =>
+                                      prev.filter((_, i) => i !== idx)
+                                    )
+                                  }
+                                  title="Зураг хасах"
+                                  className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-black/80 hover:bg-red-900/90 text-slate-200 flex items-center justify-center border border-slate-700"
+                                >
+                                  <X className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between gap-2">
+                          <label
+                            title="Утасны зургийн цомгоос зураг оруулах (камер биш)"
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded bg-[#07090e] hover:bg-[#131824] text-[11px] text-slate-300 border border-[#1b2232] transition-colors cursor-pointer ${
+                              isUploadingReplyImage || replyImages.length >= 4
+                                ? 'opacity-50 pointer-events-none'
+                                : ''
+                            }`}
                           >
-                            {t.cancel}
-                          </button>
-                          <button
-                            type="submit"
-                            disabled={isPostingReply || !replyText.trim()}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 text-[11px] font-semibold border border-slate-700 disabled:opacity-40"
-                          >
-                            {isPostingReply ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
+                            {isUploadingReplyImage ? (
+                              <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
                             ) : (
-                              <Send className="w-3 h-3" />
+                              <ImagePlus className="w-3 h-3 text-slate-400" />
                             )}
-                            <span>Хариу илгээх</span>
-                          </button>
+                            <span>
+                              {isUploadingReplyImage
+                                ? 'Бэлдэж байна...'
+                                : `Зураг (${replyImages.length}/4)`}
+                            </span>
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
+                              multiple
+                              disabled={isUploadingReplyImage || replyImages.length >= 4}
+                              onChange={(e) => handlePickGalleryImages(e, 'reply')}
+                              className="hidden"
+                            />
+                          </label>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReplyTarget(null);
+                                setReplyText('');
+                                setReplyImages([]);
+                              }}
+                              className="px-2.5 py-1 rounded text-[11px] text-slate-400 hover:text-slate-200"
+                            >
+                              {t.cancel}
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={
+                                isPostingReply ||
+                                isUploadingReplyImage ||
+                                (!replyText.trim() && replyImages.length === 0)
+                              }
+                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 text-[11px] font-semibold border border-slate-700 disabled:opacity-40"
+                            >
+                              {isPostingReply ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Send className="w-3 h-3" />
+                              )}
+                              <span>Хариу илгээх</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </form>
@@ -581,6 +797,33 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
           </div>
         )}
       </div>
+
+      {/* Fullscreen Image Lightbox */}
+      {lightboxImage && (
+        <div
+          onClick={() => setLightboxImage(null)}
+          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <button
+            type="button"
+            onClick={() => setLightboxImage(null)}
+            className="absolute top-4 right-4 p-2 rounded-full bg-[#11151f] hover:bg-[#1c2333] text-slate-200 border border-[#242c3f] transition-colors"
+            title="Хаах"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-4xl max-h-[90vh] flex items-center justify-center"
+          >
+            <MediaImage
+              src={lightboxImage}
+              alt="Сэтгэгдлийн зураг"
+              className="max-w-full max-h-[88vh] object-contain rounded-lg border border-[#1f2636] shadow-2xl"
+            />
+          </div>
+        </div>
+      )}
     </section>
   );
 };

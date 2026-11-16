@@ -63,11 +63,20 @@ service cloud.firestore {
 
     function isValidComment(data) {
       return data.keys().hasAll(['manhwaId', 'targetType', 'userName', 'text']) &&
-        data.keys().hasOnly(['manhwaId', 'chapterId', 'targetType', 'userId', 'userName', 'userAvatar', 'text', 'createdAt', 'parentId', 'replyToName', 'likedBy']) &&
+        data.keys().hasOnly(['manhwaId', 'chapterId', 'targetType', 'userId', 'userName', 'userAvatar', 'text', 'imageUrls', 'createdAt', 'parentId', 'replyToName', 'likedBy']) &&
         data.manhwaId is string && data.manhwaId.size() <= 128 &&
         data.targetType in ['manhwa', 'chapter'] &&
         data.userName is string && data.userName.size() > 0 && data.userName.size() <= 120 &&
-        data.text is string && data.text.size() > 0 && data.text.size() <= 2000 &&
+        data.text is string && data.text.size() <= 2000 &&
+        (data.text.size() > 0 || ('imageUrls' in data && data.imageUrls is list && data.imageUrls.size() > 0)) &&
+        (!('imageUrls' in data) || (
+          data.imageUrls is list &&
+          data.imageUrls.size() <= 4 &&
+          (data.imageUrls.size() == 0 || (data.imageUrls[0] is string && data.imageUrls[0].size() <= 2000)) &&
+          (data.imageUrls.size() < 2 || (data.imageUrls[1] is string && data.imageUrls[1].size() <= 2000)) &&
+          (data.imageUrls.size() < 3 || (data.imageUrls[2] is string && data.imageUrls[2].size() <= 2000)) &&
+          (data.imageUrls.size() < 4 || (data.imageUrls[3] is string && data.imageUrls[3].size() <= 2000))
+        )) &&
         (!('chapterId' in data) || (data.chapterId is string && data.chapterId.size() <= 128)) &&
         (!('userId' in data) || (data.userId is string && data.userId.size() <= 128)) &&
         (!('userAvatar' in data) || (data.userAvatar is string && data.userAvatar.size() <= 2000)) &&
@@ -108,6 +117,15 @@ service cloud.firestore {
         (!('size' in data) || (data.size is number && data.size > 0 && data.size <= 150000));
     }
 
+    function isValidCommentImage(data) {
+      return data.keys().hasAll(['dataUrl', 'mimeType', 'createdAt']) &&
+        data.keys().hasOnly(['dataUrl', 'mimeType', 'size', 'createdAt']) &&
+        data.dataUrl is string && data.dataUrl.size() > 0 && data.dataUrl.size() <= 600000 &&
+        data.mimeType is string && data.mimeType.size() > 0 && data.mimeType.size() <= 100 &&
+        data.createdAt is string && data.createdAt.size() <= 50 &&
+        (!('size' in data) || (data.size is number && data.size > 0 && data.size <= 600000));
+    }
+
     // Manhwa titles - publicly readable, admin editable
     match /manhwa/{manhwaId} {
       allow read: if true;
@@ -140,6 +158,15 @@ service cloud.firestore {
       allow create: if isValidId(avatarId) && isValidAvatar(incoming());
       allow update: if isValidId(avatarId) && isValidAvatar(incoming());
       allow delete: if isAdmin() && isValidId(avatarId);
+    }
+
+    // Comment gallery image attachments - publicly readable, immutable once created, admin can moderate
+    match /commentImages/{imageId} {
+      allow get: if isValidId(imageId);
+      allow list: if false;
+      allow create: if isValidId(imageId) && isValidCommentImage(incoming());
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(imageId);
     }
 
     // Comments - publicly readable, readers can post replies & toggle heart reactions, admin can moderate
