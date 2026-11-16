@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Comment, Reader } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
@@ -11,6 +11,9 @@ import {
   Clock,
   Loader2,
   LogIn,
+  Heart,
+  CornerDownRight,
+  X,
 } from 'lucide-react';
 
 interface CommentSectionProps {
@@ -36,12 +39,23 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
   const [isPosting, setIsPosting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
+  // Reply state
+  const [replyTarget, setReplyTarget] = useState<{
+    rootCommentId: string;
+    replyToName: string;
+  } | null>(null);
+  const [replyText, setReplyText] = useState<string>('');
+  const [isPostingReply, setIsPostingReply] = useState<boolean>(false);
+  const [togglingHeartId, setTogglingHeartId] = useState<string | null>(null);
+
   const targetId = targetType === 'chapter' && chapterId ? chapterId : manhwaId;
 
-  // Real-time comments listener (shows all users' comments persistently)
+  // Real-time comments listener (shows all users' comments and replies persistently)
   useEffect(() => {
     setLoading(true);
     setErrorMsg('');
+    setReplyTarget(null);
+    setReplyText('');
     const unsubscribe = commentService.subscribeComments(
       targetType,
       targetId,
@@ -56,6 +70,30 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     );
     return () => unsubscribe();
   }, [targetType, targetId]);
+
+  // Group comments into top-level threads + chronological replies
+  const { topLevelComments, repliesByParent } = useMemo(() => {
+    const idSet = new Set(comments.map((c) => c.id));
+    const topLevel: Comment[] = [];
+    const grouped: Record<string, Comment[]> = {};
+
+    for (const c of comments) {
+      if (c.parentId && idSet.has(c.parentId)) {
+        if (!grouped[c.parentId]) grouped[c.parentId] = [];
+        grouped[c.parentId].push(c);
+      } else {
+        topLevel.push(c);
+      }
+    }
+
+    // Top-level newest first; replies oldest first for natural conversation flow
+    topLevel.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    Object.keys(grouped).forEach((pid) => {
+      grouped[pid].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    });
+
+    return { topLevelComments: topLevel, repliesByParent: grouped };
+  }, [comments]);
 
   const handlePostComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,6 +123,69 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     }
   };
 
+  const handleOpenReply = (rootCommentId: string, replyToName: string) => {
+    if (!currentReader) {
+      onOpenReaderAuth();
+      return;
+    }
+    setReplyTarget({ rootCommentId, replyToName });
+    setReplyText('');
+  };
+
+  const handlePostReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentReader) {
+      onOpenReaderAuth();
+      return;
+    }
+    if (!replyTarget) return;
+
+    const trimmed = replyText.trim();
+    if (!trimmed) return;
+
+    try {
+      setIsPostingReply(true);
+      setErrorMsg('');
+      await commentService.postComment(
+        manhwaId,
+        targetType,
+        trimmed,
+        currentReader,
+        chapterId,
+        {
+          parentId: replyTarget.rootCommentId,
+          replyToName: replyTarget.replyToName,
+        }
+      );
+      setReplyText('');
+      setReplyTarget(null);
+    } catch (err: any) {
+      setErrorMsg('Хариу илгээхэд алдаа гарлаа: ' + (err?.message || 'Error'));
+    } finally {
+      setIsPostingReply(false);
+    }
+  };
+
+  const handleToggleHeart = async (comment: Comment) => {
+    if (!currentReader) {
+      onOpenReaderAuth();
+      return;
+    }
+    if (togglingHeartId === comment.id) return;
+
+    const likedList = comment.likedBy || [];
+    const currentlyLiked = likedList.includes(currentReader.id);
+
+    try {
+      setTogglingHeartId(comment.id);
+      await commentService.toggleHeart(comment.id, currentReader, currentlyLiked);
+    } catch (err: any) {
+      setErrorMsg('Зүрх дарахад алдаа гарлаа: ' + (err?.message || 'Error'));
+    } finally {
+      setTogglingHeartId(null);
+    }
+  };
+
   const handleDeleteComment = async (commentId: string) => {
     try {
       await commentService.deleteComment(commentId);
@@ -107,6 +208,114 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
     } catch {
       return isoString;
     }
+  };
+
+  const renderCommentItem = (
+    comment: Comment,
+    rootId: string,
+    isReply: boolean
+  ) => {
+    const likedList = comment.likedBy || [];
+    const heartCount = likedList.length;
+    const isLiked = Boolean(currentReader && likedList.includes(currentReader.id));
+
+    return (
+      <div className="flex items-start gap-2.5 sm:gap-3">
+        {/* Commenter Avatar */}
+        <div
+          className={`${
+            isReply ? 'w-7 h-7' : 'w-8 h-8'
+          } rounded-full overflow-hidden bg-black/40 border border-[#1b212e] flex-shrink-0 mt-0.5`}
+        >
+          {comment.userAvatar ? (
+            <img
+              src={comment.userAvatar}
+              alt={comment.userName}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
+                  comment.userName
+                )}`;
+              }}
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs font-bold bg-[#141824]">
+              {comment.userName.charAt(0).toUpperCase()}
+            </div>
+          )}
+        </div>
+
+        {/* Comment Body */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-semibold text-xs text-slate-200">
+                {comment.userName}
+              </span>
+              {isReply && comment.replyToName && (
+                <span className="text-[10px] text-slate-400 bg-[#0d1119] border border-[#19202e] px-1.5 py-0.2 rounded">
+                  @{comment.replyToName}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 text-[10px] text-slate-500 flex-shrink-0">
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {formatTimestamp(comment.createdAt)}
+              </span>
+
+              {/* Admin moderation delete */}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteComment(comment.id)}
+                  title="Сэтгэгдэл устгах (Админ)"
+                  className="p-1 rounded text-slate-500 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-300 font-light mt-1.5 leading-relaxed whitespace-pre-line break-words">
+            {comment.text}
+          </p>
+
+          {/* Actions Row: ONLY Heart + Reply */}
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              type="button"
+              disabled={togglingHeartId === comment.id}
+              onClick={() => handleToggleHeart(comment)}
+              title="Зүрх дарах"
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border transition-colors ${
+                isLiked
+                  ? 'bg-rose-950/30 border-rose-800/40 text-rose-300'
+                  : 'bg-[#0b0e15] border-[#161b26] text-slate-400 hover:text-rose-300 hover:border-[#242c3d]'
+              } disabled:opacity-60`}
+            >
+              <Heart
+                className={`w-3 h-3 transition-transform ${
+                  isLiked ? 'fill-rose-400 text-rose-400 scale-110' : ''
+                }`}
+              />
+              {heartCount > 0 && <span className="font-mono text-[10px]">{heartCount}</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleOpenReply(rootId, comment.userName)}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] text-slate-400 hover:text-slate-200 hover:bg-[#11151f] transition-colors"
+            >
+              <CornerDownRight className="w-3 h-3" />
+              <span>Хариулах</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -242,70 +451,99 @@ export const CommentSection: React.FC<CommentSectionProps> = ({
             <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2 text-slate-500" />
             <p>Сэтгэгдлүүдийг ачаалж байна...</p>
           </div>
-        ) : comments.length === 0 ? (
+        ) : topLevelComments.length === 0 ? (
           <div className="py-10 text-center flex flex-col items-center justify-center text-slate-500">
             <MessageSquare className="w-8 h-8 text-slate-700 mb-2 stroke-1" />
             <p className="text-xs font-medium text-slate-400">{t.noComments}</p>
             <p className="text-[11px] text-slate-600 mt-0.5">{t.firstToComment}</p>
           </div>
         ) : (
-          <div className="space-y-3.5 divide-y divide-[#121620]">
-            {comments.map((comment) => (
-              <div key={comment.id} className="pt-3.5 first:pt-0 flex items-start gap-3">
-                {/* Commenter Avatar */}
-                <div className="w-8 h-8 rounded-full overflow-hidden bg-black/40 border border-[#1b212e] flex-shrink-0 mt-0.5">
-                  {comment.userAvatar ? (
-                    <img
-                      src={comment.userAvatar}
-                      alt={comment.userName}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(
-                          comment.userName
-                        )}`;
-                      }}
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs font-bold bg-[#141824]">
-                      {comment.userName.charAt(0).toUpperCase()}
+          <div className="space-y-4 divide-y divide-[#121620]">
+            {topLevelComments.map((comment) => {
+              const replies = repliesByParent[comment.id] || [];
+              const isReplyingHere = replyTarget?.rootCommentId === comment.id;
+
+              return (
+                <div key={comment.id} className="pt-4 first:pt-0 space-y-3">
+                  {renderCommentItem(comment, comment.id, false)}
+
+                  {/* Nested Replies */}
+                  {replies.length > 0 && (
+                    <div className="ml-5 sm:ml-9 pl-3 sm:pl-4 border-l border-[#1a202e] space-y-3 pt-1">
+                      {replies.map((reply) => (
+                        <div key={reply.id}>
+                          {renderCommentItem(reply, comment.id, true)}
+                        </div>
+                      ))}
                     </div>
                   )}
+
+                  {/* Inline Reply Composer */}
+                  {isReplyingHere && currentReader && (
+                    <form
+                      onSubmit={handlePostReply}
+                      className="ml-5 sm:ml-9 pl-3 sm:pl-4 border-l border-[#252e42] pt-1"
+                    >
+                      <div className="bg-[#0b0e15] border border-[#192030] rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between text-[11px] text-slate-400">
+                          <span>
+                            <strong className="text-slate-200 font-medium">
+                              @{replyTarget.replyToName}
+                            </strong>{' '}
+                            хэрэглэгчид хариу бичиж байна
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReplyTarget(null);
+                              setReplyText('');
+                            }}
+                            className="p-0.5 rounded text-slate-500 hover:text-slate-200"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <textarea
+                          rows={2}
+                          autoFocus
+                          maxLength={2000}
+                          value={replyText}
+                          onChange={(e) => setReplyText(e.target.value)}
+                          placeholder="Хариу сэтгэгдлээ бичнэ үү..."
+                          className="w-full bg-[#07090e] border border-[#171c28] rounded-md px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-[#2f384c] resize-y"
+                        />
+
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReplyTarget(null);
+                              setReplyText('');
+                            }}
+                            className="px-2.5 py-1 rounded text-[11px] text-slate-400 hover:text-slate-200"
+                          >
+                            {t.cancel}
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isPostingReply || !replyText.trim()}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 text-[11px] font-semibold border border-slate-700 disabled:opacity-40"
+                          >
+                            {isPostingReply ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Send className="w-3 h-3" />
+                            )}
+                            <span>Хариу илгээх</span>
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  )}
                 </div>
-
-                {/* Comment Body */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-xs text-slate-200">
-                        {comment.userName}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {formatTimestamp(comment.createdAt)}
-                      </span>
-
-                      {/* Admin moderation delete */}
-                      {isAdmin && (
-                        <button
-                          onClick={() => handleDeleteComment(comment.id)}
-                          title="Сэтгэгдэл устгах (Админ)"
-                          className="p-1 rounded text-slate-500 hover:text-red-400 transition-colors"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-slate-300 font-light mt-1.5 leading-relaxed whitespace-pre-line">
-                    {comment.text}
-                  </p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

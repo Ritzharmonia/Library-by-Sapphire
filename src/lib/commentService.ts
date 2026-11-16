@@ -3,11 +3,15 @@ import {
   doc,
   addDoc,
   setDoc,
+  updateDoc,
   deleteDoc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   where,
+  arrayUnion,
+  arrayRemove,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
@@ -242,6 +246,9 @@ export const commentService = {
             userName: d.userName || 'Anonymous',
             userAvatar: d.userAvatar,
             text: d.text || '',
+            parentId: d.parentId || undefined,
+            replyToName: d.replyToName || undefined,
+            likedBy: Array.isArray(d.likedBy) ? d.likedBy : [],
             createdAt: d.createdAt || new Date().toISOString(),
           });
         });
@@ -259,14 +266,15 @@ export const commentService = {
   },
 
   /**
-   * Post a new comment persistently to Firestore
+   * Post a new comment or reply persistently to Firestore
    */
   async postComment(
     manhwaId: string,
     targetType: 'manhwa' | 'chapter',
     text: string,
     reader: Reader,
-    chapterId?: string
+    chapterId?: string,
+    replyOptions?: { parentId?: string; replyToName?: string }
   ): Promise<string> {
     const colRef = collection(db, COMMENTS_COLLECTION);
     const userName = (reader.fullName || `${reader.lastName} ${reader.firstName}`).trim().slice(0, 120);
@@ -281,8 +289,13 @@ export const commentService = {
       userId: safeUserId.slice(0, 128),
       userName,
       userAvatar: safeAvatarUrl(reader.avatarUrl, userName),
+      likedBy: [] as string[],
       createdAt: new Date().toISOString(),
       ...(chapterId ? { chapterId: chapterId.slice(0, 128) } : {}),
+      ...(replyOptions?.parentId ? { parentId: replyOptions.parentId.slice(0, 128) } : {}),
+      ...(replyOptions?.replyToName
+        ? { replyToName: replyOptions.replyToName.trim().slice(0, 120) }
+        : {}),
     };
 
     try {
@@ -311,10 +324,40 @@ export const commentService = {
   },
 
   /**
-   * Delete comment (Admin moderation)
+   * Toggle heart reaction on a comment or reply atomically
+   */
+  async toggleHeart(
+    commentId: string,
+    reader: Reader,
+    currentlyLiked: boolean
+  ): Promise<void> {
+    const safeReaderId = isAsciiValidId(reader.id)
+      ? reader.id
+      : makeReaderId(reader.lastName || '', reader.firstName || '');
+    const docRef = doc(db, COMMENTS_COLLECTION, commentId);
+
+    try {
+      await updateDoc(docRef, {
+        likedBy: currentlyLiked ? arrayRemove(safeReaderId) : arrayUnion(safeReaderId),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${COMMENTS_COLLECTION}/${commentId}`);
+    }
+  },
+
+  /**
+   * Delete comment and any child replies (Admin moderation)
    */
   async deleteComment(commentId: string): Promise<void> {
     try {
+      const repliesQ = query(
+        collection(db, COMMENTS_COLLECTION),
+        where('parentId', '==', commentId)
+      );
+      const replySnaps = await getDocs(repliesQ);
+      for (const rDoc of replySnaps.docs) {
+        await deleteDoc(doc(db, COMMENTS_COLLECTION, rDoc.id));
+      }
       await deleteDoc(doc(db, COMMENTS_COLLECTION, commentId));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `${COMMENTS_COLLECTION}/${commentId}`);

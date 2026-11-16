@@ -42,6 +42,9 @@ export interface Comment {
   userName: string;
   userAvatar?: string;
   text: string;
+  parentId?: string;
+  replyToName?: string;
+  likedBy?: string[];
   createdAt: string;
 }
 

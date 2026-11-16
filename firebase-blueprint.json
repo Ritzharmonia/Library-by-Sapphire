@@ -41,7 +41,7 @@
     },
     "Comment": {
       "title": "Comment",
-      "description": "User comment on a manhwa or chapter.",
+      "description": "User comment or reply on a manhwa or chapter, with heart reactions.",
       "type": "object",
       "properties": {
         "manhwaId": { "type": "string", "maxLength": 128, "description": "Target manhwa ID" },
@@ -50,7 +50,10 @@
         "userId": { "type": "string", "maxLength": 128, "description": "ID of commenter" },
         "userName": { "type": "string", "maxLength": 120, "description": "Display name of commenter" },
         "userAvatar": { "type": "string", "maxLength": 2000, "description": "Profile picture URL" },
-        "text": { "type": "string", "maxLength": 1000, "description": "Content of comment" },
+        "text": { "type": "string", "maxLength": 2000, "description": "Content of comment" },
+        "parentId": { "type": "string", "maxLength": 128, "description": "Parent comment ID if this is a reply" },
+        "replyToName": { "type": "string", "maxLength": 120, "description": "Display name of commenter being replied to" },
+        "likedBy": { "type": "array", "description": "Bounded list of reader IDs who pressed heart" },
         "createdAt": { "type": "string", "description": "Timestamp" }
       },
       "required": ["manhwaId", "targetType", "userName", "text"]

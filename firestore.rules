@@ -63,7 +63,7 @@ service cloud.firestore {
 
     function isValidComment(data) {
       return data.keys().hasAll(['manhwaId', 'targetType', 'userName', 'text']) &&
-        data.keys().hasOnly(['manhwaId', 'chapterId', 'targetType', 'userId', 'userName', 'userAvatar', 'text', 'createdAt']) &&
+        data.keys().hasOnly(['manhwaId', 'chapterId', 'targetType', 'userId', 'userName', 'userAvatar', 'text', 'createdAt', 'parentId', 'replyToName', 'likedBy']) &&
         data.manhwaId is string && data.manhwaId.size() <= 128 &&
         data.targetType in ['manhwa', 'chapter'] &&
         data.userName is string && data.userName.size() > 0 && data.userName.size() <= 120 &&
@@ -71,7 +71,10 @@ service cloud.firestore {
         (!('chapterId' in data) || (data.chapterId is string && data.chapterId.size() <= 128)) &&
         (!('userId' in data) || (data.userId is string && data.userId.size() <= 128)) &&
         (!('userAvatar' in data) || (data.userAvatar is string && data.userAvatar.size() <= 2000)) &&
-        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 50));
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 50)) &&
+        (!('parentId' in data) || (data.parentId is string && data.parentId.size() <= 128)) &&
+        (!('replyToName' in data) || (data.replyToName is string && data.replyToName.size() <= 120)) &&
+        (!('likedBy' in data) || (data.likedBy is list && data.likedBy.size() <= 500 && (data.likedBy.size() == 0 || data.likedBy[0] is string)));
     }
 
     function isValidReader(data) {
@@ -121,11 +124,15 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(mediaId);
     }
 
-    // Comments - publicly readable, readers can post, admin can moderate
+    // Comments - publicly readable, readers can post replies & toggle heart reactions, admin can moderate
     match /comments/{commentId} {
       allow read: if true;
-      allow create: if isValidId(commentId) && isValidComment(incoming());
-      allow update: if false;
+      allow create: if isValidId(commentId) &&
+        isValidComment(incoming()) &&
+        (!('parentId' in incoming()) || exists(/databases/$(database)/documents/comments/$(incoming().parentId)));
+      allow update: if isValidId(commentId) &&
+        isValidComment(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['likedBy']);
       allow delete: if isAdmin();
     }
 
